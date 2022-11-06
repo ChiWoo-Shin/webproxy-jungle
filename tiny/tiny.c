@@ -21,7 +21,7 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 void doit(int fd){
   int is_static;
   struct stat sbuf;
-  char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+  char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE]; // HTTP는 제한이 없지만 MAXLINE에 대한 제한은 없지만 서버 이용을 위해서 길이의 제한을 이용해줌 
   char filename[MAXLINE], cgiargs[MAXLINE];
   rio_t rio;
   
@@ -60,7 +60,7 @@ void doit(int fd){
     serve_static(fd, filename, sbuf.st_size); // 위 if문에 걸리지 않으면 정적 컨텐츠를 클라이언트에게 제공
   }
   else{ /* Serve dynamic content -- request 가 동적 컨텐츠를 위한 것이라면*/
-    if(!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)){ // 해당 파일이 보통 파일이라는 것과 실행 가능한지를 검증
+    if(!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)){ // 해당 파일이 보통 파일이라는 것과 실행 가능한지를 검증
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
       return;
     }
@@ -133,20 +133,27 @@ void serve_static (int fd, char *filename, int filesize){ // Tiny는 5개의 서
   /* Send response headers to client */
   get_filetype(filename, filetype); // 파일 이름의 접미어 부분을 검사해서 파일 타입을 결정하고 HTTP 응답을 보냄
   sprintf(buf, "HTTP/1.0 200 OK\r\n"); // response line과 response header를 client에게 보냄 start
-  sprintf(buf, "%sServer: Tiny Web Server\r\n", buf); // 위에서부터 누적해서 buf + 해당 text를 누적함
-  sprintf(buf, "%sConnection: close\r\n", buf);
-  sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
-  sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype); // \r\n 이 반복되어서 빈 줄이 하나 더 생김 --> 헤더를 종료함
+  sprintf(buf, "%s Server: Tiny Web Server\r\n", buf); // 위에서부터 누적해서 buf + 해당 text를 누적함
+  sprintf(buf, "%s Connection: close\r\n", buf);
+  sprintf(buf, "%s Content-length: %d\r\n", buf, filesize);
+  sprintf(buf, "%s Content-type: %s\r\n\r\n", buf, filetype); // \r\n 이 반복되어서 빈 줄이 하나 더 생김 --> 헤더를 종료함
   Rio_writen(fd, buf, strlen(buf)); // response line과 response header를 client에게 보냄 end -- 위에서 받은 buf를 fd에 복사해넣음 buf 크기만큼
   printf("Response headers: \n");
   printf("%s", buf); // 마지막에 buf에 누적된 것들을 다시 확인
 
   /* Send response body to client -- 요청한 파일의 내용을 연결 식별자 fd로 복사해서 응답 본체를 보냄 */
   srcfd = Open(filename, O_RDONLY, 0); // filename을 open하고 식별자를 얻음
-  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // 리눅스 mmap 함수는 요청한 파일을 가상메모리 영역으로 맵핑
-  Close(srcfd); // 파일을 메모리로 맵핑 후에 더 이상 해당 식별자는 필요 없으며, 이 파일을 닫음 --> 하지 않으면 치명적인 메모리 누수가 발생할 수 있음
-  Rio_writen(fd, srcp, filesize); // 실제로 파일을 클라이언트에게 전송 -- 주소 srcp에서 시작하는 filesize 바이트를 클라이언트의 연결 식별자로 복사
-  Munmap(srcp, filesize); // 매핑된 가상메모리 주소를 반환 -- 메모리 누수를 피하기 위해서도 필수임
+  // srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // 리눅스 mmap 함수는 요청한 파일을 가상메모리 영역으로 맵핑
+  // Close(srcfd); // 파일을 메모리로 맵핑 후에 더 이상 해당 식별자는 필요 없으며, 이 파일을 닫음 --> 하지 않으면 치명적인 메모리 누수가 발생할 수 있음
+  // Rio_writen(fd, srcp, filesize); // 실제로 파일을 클라이언트에게 전송 -- 주소 srcp에서 시작하는 filesize 바이트를 클라이언트의 연결 식별자로 복사
+  // Munmap(srcp, filesize); // 매핑된 가상메모리 주소를 반환 -- 메모리 누수를 피하기 위해서도 필수임
+
+  // mmap대신에 malloc으로 전달
+  srcp = (char *)malloc(filesize);
+  Rio_readn(srcfd, srcp, filesize);
+  Close(srcfd);
+  Rio_writen(fd, srcp,filesize);
+  free(srcp);
 }
 
 /*
@@ -161,6 +168,8 @@ void get_filetype(char *filename, char *filetype){ // 적합한 file type을 찾
     strcpy(filetype, "image/png");
   else if(strstr(filename, ".jpg"))
     strcpy(filetype, "image/jpeg");
+  else if(strstr(filename, ".mp4"))
+    strcpy(filetype, "video/mp4");
   else
     strcpy(filetype, "text/plain");
 }
@@ -190,7 +199,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs){ // Tiny는 child proc
     */
     Execve(filename, emptylist, environ); /* Run CGI program -- CGI 프로그램을 로드하고 실행*/
   }
-  wait(NULL); /* Parent waits for and reaps child -- 부모는 자식이 종료되어 정리되는 것을 기다리기 위해 wait 함수에서 블록됨*/
+  Wait(NULL); /* Parent waits for and reaps child -- 부모는 자식이 종료되어 정리되는 것을 기다리기 위해 wait 함수에서 블록됨*/
 }
 
 int main(int argc, char **argv) {
@@ -200,8 +209,8 @@ int main(int argc, char **argv) {
   struct sockaddr_storage clientaddr;
 
   /* Check command line args */
-  if (argc != 2) {
-    fprintf(stderr, "usage: %s <port>\n", argv[0]);
+  if (argc != 2) { // 두개 라는건 file name과 port 해서 2개 즉 처음에 port 입력 안되면 에러다
+    fprintf(stderr, "usage: %s <port>\n", argv[0]); // 0은 file name
     exit(1);
   }
 

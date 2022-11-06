@@ -14,7 +14,6 @@ int main(void) {
   char *buf, *p;
   char arg1[MAXLINE], arg2[MAXLINE], content[MAXLINE];
   int n1 = 0, n2 = 0;
-
   /* Extract the two arguments */
   if ((buf = getenv("QUERY_STRING")) !=NULL){
     p = strchr(buf, '&');
@@ -24,10 +23,12 @@ int main(void) {
     이 문자를 가리켜 널(null) 문자라하며 아스키코드값 0에 해당.
     symbol(name)은 NUL
     */
-   strcpy(arg1, buf);
-   strcpy(arg2, p+1);
-   n1 = atoi(arg1);
-   n2 = atoi(arg2);
+   sscanf(buf,"arg1=%d",&n1);
+   sscanf(p+1,"arg2=%d",&n2);
+  //  strcpy(arg1, buf); // 책에 써있는 것을 그대로 사용하면 앞에서 넘어올때 string으로 넘어오게됨 또한 arg1= 이라는 타입과 같이 넘어오게 되면서
+  //  strcpy(arg2, p+1); // 우리는 값을 정확하게 쓸 수없음 그래서 arg1= 에서 숫자를 띠어서 값을 각각에 넣어주는 방법을 사용함
+  //  n1 = atoi(arg1);
+  //  n2 = atoi(arg2);
   }
 
   /* Make the response body */
