@@ -948,11 +948,11 @@ ssize_t Rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen)
  */
 /* $begin open_clientfd */
 int open_clientfd(char *hostname, char *port) {
-    int clientfd, rc;
-    struct addrinfo hints, *listp, *p;
+    int clientfd, rc; // 선언하고
+    struct addrinfo hints, *listp, *p; // address info 구조체 선언
 
     /* Get a list of potential server addresses */
-    memset(&hints, 0, sizeof(struct addrinfo));
+    memset(&hints, 0, sizeof(struct addrinfo)); // 위에서 받은 선언한 hints를 '0' 으로 초기화
     hints.ai_socktype = SOCK_STREAM;  /* Open a connection */
     hints.ai_flags = AI_NUMERICSERV;  /* ... using a numeric port arg. */
     hints.ai_flags |= AI_ADDRCONFIG;  /* Recommended for connections */
