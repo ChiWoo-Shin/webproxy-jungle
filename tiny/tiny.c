@@ -31,7 +31,7 @@ void doit(int fd){
   printf("Request headers:\n"); 
   sscanf(buf, "%s %s %s",method, uri, version); // 이를 쪼개서 method, uri,version에 저장함
   printf("%s %s %s\n",method, uri, version);
-  if (strcmp(method, "GET")){ // Tiny는 GET method만 지원 - 다른 method를 요청하면 에러메시지를 보내고, main 루틴으로 돌아옴
+  if (strcmp(method, "GET") && strcmp(method, "HEAD")){ // Tiny는 GET method만 지원 - 다른 method를 요청하면 에러메시지를 보내고, main 루틴으로 돌아옴
     clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
     return;
   }
@@ -94,6 +94,7 @@ void read_requesthdrs(rio_t *rp){ // Tiny는 요청 헤더 내의 어떤 정보�
   char buf[MAXLINE];
 
   Rio_readlineb(rp, buf, MAXLINE); // rp의 값을 buf에 복사해 넣음 line by line으로 움직임
+  printf("%s", buf);
   while(strcmp(buf, "\r\n")){  // 요청 헤더를 종료하는 빈 텍스트 줄이 6번 줄에서 체크하고 있는 carriage return과 line feed 쌍으로 구성되어 있음
     Rio_readlineb(rp, buf, MAXLINE); // buf 가 \r\n 과 동일하면 멈출거고 그게 아니면 지속적으로 line을 읽으면서 복사해나감
     printf("%s", buf);
@@ -133,10 +134,10 @@ void serve_static (int fd, char *filename, int filesize){ // Tiny는 5개의 서
   /* Send response headers to client */
   get_filetype(filename, filetype); // 파일 이름의 접미어 부분을 검사해서 파일 타입을 결정하고 HTTP 응답을 보냄
   sprintf(buf, "HTTP/1.0 200 OK\r\n"); // response line과 response header를 client에게 보냄 start
-  sprintf(buf, "%s Server: Tiny Web Server\r\n", buf); // 위에서부터 누적해서 buf + 해당 text를 누적함
-  sprintf(buf, "%s Connection: close\r\n", buf);
-  sprintf(buf, "%s Content-length: %d\r\n", buf, filesize);
-  sprintf(buf, "%s Content-type: %s\r\n\r\n", buf, filetype); // \r\n 이 반복되어서 빈 줄이 하나 더 생김 --> 헤더를 종료함
+  sprintf(buf, "%sServer: Tiny Web Server\r\n", buf); // 위에서부터 누적해서 buf + 해당 text를 누적함
+  sprintf(buf, "%sConnection: close\r\n", buf);
+  sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
+  sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype); // \r\n 이 반복되어서 빈 줄이 하나 더 생김 --> 헤더를 종료함
   Rio_writen(fd, buf, strlen(buf)); // response line과 response header를 client에게 보냄 end -- 위에서 받은 buf를 fd에 복사해넣음 buf 크기만큼
   printf("Response headers: \n");
   printf("%s", buf); // 마지막에 buf에 누적된 것들을 다시 확인
