@@ -8,6 +8,8 @@ void doit(int fd);
 void find_host(char *uri, char *hostinfo, char *portinfo, char *remain_uri);
 void make_header(char *hostinfo, char *portinfo, int fd, char *version, char *remain_uri);
 void response_server(int pto_s_fd, int fd);
+void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
+void *thread(void *vargp); // 동시성 - thread에서는 각각의 쓰레드 루틴마다 입력으로 한 개의 기본 포인터를 가져옴
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr =
     "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 "
@@ -31,7 +33,7 @@ void doit(int fd)
   printf("%s %s %s\n", method, uri, version);
   if (strcmp(method, "GET"))
   {
-    // clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
+    clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
     printf("문제가 있음");
     return;
   }
@@ -44,8 +46,29 @@ void doit(int fd)
   make_header(hostinfo, portinfo, pto_s_fd, version, remain_uri);
 
   // check response
-  response_server(pto_s_fd, fd); 
+  response_server(pto_s_fd, fd);
+  Close(pto_s_fd);
 
+}
+
+void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg){
+  char buf[MAXLINE], body[MAXLINE];
+
+  /* Build the HTTP response body */
+  sprintf(body, "<html><title>Tiny Error</title>");
+  sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
+  sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
+  sprintf(body, "%s<p>%s: %s\r\n",body, longmsg, cause);
+  sprintf(body, "%s<hr><em>The Tiny Web server</em>\r\n", body);
+
+  /* Print the HTTP response */
+  sprintf(buf, "HTTP/1.0 %s %s \r\n", errnum, shortmsg);
+  Rio_writen(fd, buf, strlen(buf));
+  sprintf(buf, "Content-type: text/html\r\n");
+  Rio_writen(fd, buf, strlen(buf));
+  sprintf(buf, "Content-length: %d\r\n\r\n", (int)strlen(body));
+  Rio_writen(fd, buf, strlen(buf));
+  Rio_writen(fd, body, strlen(body));
 }
 
 void response_server(int pto_s_fd, int fd){
@@ -103,16 +126,25 @@ void find_host(char *uri, char *hostinfo, char *portinfo, char *remain_uri)
     p = strchr(hostinfo, 58); // www. 부터 카운트
     *p = '\0';
     strcpy(portinfo, p + 1); //  www.host.com 은 buf에 저장되고 그 뒤에가 portinfo에 저장
-    p = strchr(portinfo, 47);
-    strcpy(remain_uri, p);
-    *p = '\0';
+    if (strchr(portinfo, 47)){
+      p = strchr(portinfo, 47);
+      strcpy(remain_uri, p);
+      *p = '\0';
+    }
+    else{
+      sprintf(remain_uri,"/");
+    }
   }
   else{
-    strcpy(portinfo,"80");
-    p = strchr(hostinfo, 47);
-    strcpy(remain_uri, p);
-    *p = '\0';
-
+    sprintf(portinfo,"80");
+    if(strchr(hostinfo,47)){
+      p = strchr(hostinfo, 47);
+      strcpy(remain_uri, p);
+      *p = '\0';
+    }
+    else{
+      sprintf(remain_uri,"/");
+    }
   }  
 
   return;
@@ -124,7 +156,7 @@ void make_header(char *hostinfo, char *portinfo, int pto_s_fd, char *version, ch
   char buf[MAXLINE];
 
   sprintf(buf, "GET %s %s\n", remain_uri, version);
-  sprintf(buf, "%sHost: %s:%s\n", buf, hostinfo,portinfo);
+  sprintf(buf, "%sHost: %s:%s\n", buf, hostinfo, portinfo);
   strcat(buf, user_agent_hdr);
   strcat(buf, "Connection: close\r\n");
   strcat(buf, "Proxy-Connection: close\r\n\r\n");
@@ -134,29 +166,40 @@ void make_header(char *hostinfo, char *portinfo, int pto_s_fd, char *version, ch
   Rio_writen(pto_s_fd, buf, strlen(buf));
 }
 
+void *thread(void *vargp){ // 동시성 - thread에서는 각각의 쓰레드 루틴마다 입력으로 한 개의 기본 포인터를 가져옴
+  int connfd = *((int *)vargp); // 위에서 받은 식별자를 int로 형변환
+  Pthread_detach(pthread_self()); // thread를 분리함 인자는 자기자신 -- 분리된 thread는 종료되자마자 자원은 free함 -->그래서 종료가 따로 없는듯?
+  Free(vargp); // 얘는 이미 connfd로 옮겨놨으니 쓸모가 다함 -- free
+  doit(connfd);
+  Close(connfd);
+  return NULL;
+}
+
 int main(int argc, char **argv)
 {
-  int listenfd, connfd;
+  int listenfd, *connfdp;
   char hostname[MAXLINE], port[MAXLINE];
   socklen_t clientlen;
   struct sockaddr_storage clientaddr;
+  pthread_t tid; // peer thread의 ID를 선언
 
   if (argc != 2)
   {
     fprintf(stderr, "usage %s <port> \n", argv[0]);
-    exit(1);
+    exit(0);
   }
 
   listenfd = Open_listenfd(argv[1]);
   while (1)
   {
     clientlen = sizeof(clientaddr);
-    connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+    connfdp=malloc(sizeof(int));
+    *connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
     Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
-    doit(connfd);
-    Close(connfd);
+    Pthread_create(&tid, NULL, thread, connfdp); // Peer thread의 생성 - 인자설명 : 1. thread id 넣고, 2. attribute = NULL, 3. 함수를 호출, 4. connection 식별자
+    // pthread_create 를 호출할 때 연결 식별자를 전달하는 방법은 식별자를 가리키는 포인터를 같이 보내는 것--> 그래서 connfdp를 포인터로 선언
+    // doit(connfd);
+    // Close(connfd);
   }
 
-  // printf("%s", user_agent_hdr);
-  // return 0;
 }
