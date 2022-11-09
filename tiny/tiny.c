@@ -54,6 +54,7 @@ void doit(int fd){
 
   if (is_static){ /* Serve static content -- request가 정적 컨텐츠를 위한 것이라면*/ 
     if(!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)){ // 해당 파일이 보통 파일이라는 것과 읽기 권한을 가지고 있는지를 검증
+      //S_ISREG 는 일반파일이고 S_IRUSR 이고 읽기 권한임
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
       return;
     }
@@ -210,7 +211,7 @@ int main(int argc, char **argv) {
   struct sockaddr_storage clientaddr;
 
   /* Check command line args */
-  if (argc != 2) { // 두개 라는건 file name과 port 해서 2개 즉 처음에 port 입력 안되면 에러다
+  if (argc != 2) { // 두개 라는건 file name과 port 해서 2개 즉 처음에 port 입력 안되면 에러다 ex) ./tiny 8000 --> ./tiny = filename, 8000 이 port
     fprintf(stderr, "usage: %s <port>\n", argv[0]); // 0은 file name
     exit(1);
   }
