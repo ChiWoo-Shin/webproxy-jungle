@@ -13,10 +13,10 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 void *thread(void *vargp); // 동시성 - thread에서는 각각의 쓰레드 루틴마다 입력으로 한 개의 기본 포인터를 가져옴
 
 /* function for cache*/
-void cache_init();
-int cache_find(char *uri);
-void cache_uri(char *uri, char *cache_buf, int size_buf);
-void cache_LRU(int min_idx);
+void cache_init(); // 세마포어를 사용하기 위해서는 초기화를 해주고 시작해야함
+int cache_find(char *uri); // 데이터를 서버에 요청하기 전에 캐시에 있는지 확인
+void cache_uri(char *uri, char *cache_buf, int size_buf); // 데이터를 캐시에 저장하는 역할
+void cache_LRU(int min_idx); // 캐시에 저장할 데이터를 LRU방식으로 관리
 
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr =
@@ -27,7 +27,7 @@ typedef struct
 {
   char cache_object[MAX_OBJECT_SIZE]; // 캐시 객체 저장
   char cache_url[MAXLINE];            // 캐시 URL 저장
-  int LRU;                            // 캐시 넘버링
+  int LRU;                            // 캐시 LRU 방식으로 관리
   int readCNT;                        // 캐시에 read로 접근하는 수
   int Empty_check;                    // 캐시가 비어있는지 확인 -- 0 이면 empty이고 1이면 full임
   int cache_size;
@@ -39,10 +39,9 @@ typedef struct
 typedef struct
 {
   node_t cachelist[10]; // 전체 캐시리스트는 총 10개까지 쓸 수 있다고 가정하였으니깐 10개
-  
-} cache_tree;           // 전체 캐시 리스트를 관리할 공간
+} cache_list;           // 전체 캐시 리스트를 관리할 공간
 
-cache_tree cache;
+cache_list cache;
 
 void doit(int fd)
 {
@@ -54,7 +53,6 @@ void doit(int fd)
   // 캐시를 위한 선언부
   char cache_buf[MAX_OBJECT_SIZE] = {NULL};
   int size_buf = 0;
-  int *content_len;
 
   // client --> proxy
   Rio_readinitb(&rio, fd);                       // connfd를 rio 주소로 연결함 소켓 파일을 읽기 위해서
@@ -69,14 +67,11 @@ void doit(int fd)
     return;
   }
   int cache_index;
-  if ((cache_index = cache_find(uri)) != -1)
+  if ((cache_index = cache_find(uri)) != -1) // 캐시 find 에서 캐시를 찾았으면 index를 반환하지만 못찾으면 -1을 반환
   {
     pre_read(cache_index); // 캐시 읽어올때 locking걸고 -- 우선순위는 read > write
-
-    Rio_writen(fd, cache.cachelist[cache_index].cache_object, cache.cachelist[cache_index].cache_size + 100); // 읽은걸 바로 connfd로 보내줌
-
+    Rio_writen(fd, cache.cachelist[cache_index].cache_object, cache.cachelist[cache_index].cache_size + 100); // 읽은걸 바로 connfd로 보내줌 - 사이즈의 경우 buf크기와 딱 맞는게 하니깐 위험이 생겨서 적당한 여유를 둠
     after_read(cache_index); // 캐시 다 읽었으니 unlocking으로 바꿔줌 -- 하지만 pre_read가 많다면 (즉 동시에 읽고 있는 사람들이 많다면) 마지막 reader가 빠져나갈때까지는 locking상태임
-
     return;
   }
   
@@ -85,6 +80,7 @@ void doit(int fd)
     find_host(uri, hostinfo, portinfo, remain_uri); // uri에서 host와 portinfo를 찾을거임
   }
   pto_s_fd = Open_clientfd(hostinfo, portinfo); // 프록시에서 서버로 가는 소켓을 열어줌 위에서 정리한 host 정보와 port 정보를 이용해서
+  
   // make request header from proxy to server
   make_header(hostinfo, portinfo, pto_s_fd, version, remain_uri); // proxy에서 server로 가는 소캣에 Header를 만들어서 써줄거임
 
@@ -93,7 +89,7 @@ void doit(int fd)
     
   Close(pto_s_fd); // response 까지해서 connfd에 전부 보내줬으니 소켓을 닫아줌 - 메모리 누수 방지
   
-  // 만일 캐시가 없었다면 위에까지 진행될꺼임
+  // 만일 캐시에 데이터가 없었다면 위에까지 진행될꺼임
   // 그러면 우리는 서버에서 받은 정보를 캐시에 저장해줘야함
   if (size_buf < MAX_OBJECT_SIZE)
     cache_uri(uri, cache_buf, size_buf);
@@ -123,7 +119,7 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
   Rio_writen(fd, body, strlen(body));
 }
 
-int response_server(int pto_s_fd, int fd, int size_buf, char *cache_buf)
+int response_server(int pto_s_fd, int fd, int size_buf, char *cache_buf) // 프록시가 서버로부터 돌려받은 정보를 클라이언트에게 보내줌
 {
   char buf[MAXLINE];
   rio_t stop_rio;
@@ -139,7 +135,7 @@ int response_server(int pto_s_fd, int fd, int size_buf, char *cache_buf)
     Rio_writen(fd, buf, n); // 그리고 connfd로 보내주고
   }
 
-  return size_buf; // 캐시에 저장하기 위한 크기 return
+  return size_buf; // 캐시에 저장된 buf 크기
 }
 
 void find_host(char *uri, char *hostinfo, char *portinfo, char *remain_uri)
@@ -278,26 +274,20 @@ int cache_find(char *url)
   int i;
   for (i = 0; i < 10; i++)
   {
-    
     pre_read(i);     // 캐시 읽을때 locking 걸고
-    
-    if ((cache.cachelist[i].Empty_check == 1) && (strcmp(url, cache.cachelist[i].cache_url)) == 0) break; // 캐시 읽고
-      
+    if ((cache.cachelist[i].Empty_check == 1) && (strcmp(url, cache.cachelist[i].cache_url)) == 0) break; // 캐시 읽고 : 캐시가 빈공간이 아니면서 URL이 똑같은걸 찾음
     after_read(i); // 다읽었으면 locking 풀고
-    
   }
   if (i >= 10)    return -1;
-  return i;
+  return i; // 있다면 해당 index를 return
 }
 
 void pre_read(int i)
 {  
   P(&cache.cachelist[i].rdcnt_protect); // 세마포어 P함수를 사용하여 reader의 수 제어를 보호하려고함 (얘 사용하면 -1 하고 종료)
   cache.cachelist[i].readCNT=cache.cachelist[i].readCNT+1;   // cache에 접근한 수를 올려가면서 하나 올림  
-  if (cache.cachelist[i].readCNT == 1)
-    P(&cache.cachelist[i].writing_protect);
-       // 만약 얘가 첫번째 reader이면
-     // writing을 보호해야하니깐 lock을 걸어줌 (뮤텍스 0은 unlocking이고, 1은 locking임)
+  if (cache.cachelist[i].readCNT == 1) // 만약 얘가 첫번째 reader이면
+    P(&cache.cachelist[i].writing_protect); // writing을 보호해야하니깐 lock을 걸어줌 (뮤텍스 0은 unlocking이고, 1은 locking임)
 
   V(&cache.cachelist[i].rdcnt_protect); // 정확히 1개의 쓰레드를 실행하고 rdcnt_protect 1을 올림
 }
@@ -305,7 +295,8 @@ void pre_read(int i)
 void after_read(int i)
 {
   P(&cache.cachelist[i].rdcnt_protect);
-  cache.cachelist[i].readCNT = cache.cachelist[i].readCNT-1;
+  cache.cachelist[i].readCNT = cache.cachelist[i].readCNT-1; // 다 읽었으니깐 readCNT 를(읽고있는 사람 수를) --해줌
+
   if (cache.cachelist[i].readCNT == 0) // 마지막 reader이면 이제 locking을 unlocking으로 변환
     V(&cache.cachelist[i].writing_protect);
 
